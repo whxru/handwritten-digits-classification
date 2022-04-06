@@ -6,12 +6,9 @@ class Dataset:
     Class for dealing with the structure of given data file
     """
 
-    def __init__(self, data_fp: str, label_fp: str):
-        self._data_fp = data_fp
-        self._label_fp = label_fp
-
-        self._data = Dataset.load_matrix(data_fp)
-        self._label = Dataset.load_matrix(label_fp)
+    def __init__(self, data: np.ndarray, label: np.ndarray):
+        self._data = data.copy()
+        self._label = data.copy()
 
     @property
     def data(self):
