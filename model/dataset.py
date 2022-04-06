@@ -15,6 +15,14 @@ class Dataset:
         return self._data.copy()
 
     @property
+    def data_dim(self):
+        return self._data.shape[1]
+
+    @property
+    def label_num(self):
+        return self._labels.shape[0]
+
+    @property
     def labels(self):
         return self._labels.copy()
 
