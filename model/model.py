@@ -1,6 +1,13 @@
+from compileall import compile_file
 import os
 import numpy as np
 from dataset import Dataset
+import matplotlib.pyplot as plt
+from sklearn.svm import SVC,LinearSVC
+from sklearn.model_selection import GridSearchCV
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score, classification_report
+import pickle
 
 
 class ClassificationModel:
@@ -11,6 +18,8 @@ class ClassificationModel:
         self._training_dataset = training_dataset
         self._features = np.array([])
         self._param = np.array([])
+        self._acc=[]
+
 
         if saved_name != '':
             self.restore(saved_name)
@@ -74,6 +83,7 @@ class ClassificationModel:
             self._training_dataset = Dataset(feature_mat, self._training_dataset.labels)
         return feature_mat
 
+
     def learn(self, alg: str = None, options: dict = {}):
         """
         Learn from the extracted features and do training
@@ -81,8 +91,37 @@ class ClassificationModel:
         :param options: optional, key-value pairs for the algorithm setting
         :return:
         """
+        if alg == 'SVM':
+            #use corss_validation to select the best parameter
+            train_x, test_x, train_y, test_y = train_test_split(self._training_dataset.data, self._training_dataset.labels.ravel(), test_size=(1-options['test_ratio']))
+            dir_name = f'../saved_model/svm_model/'
+            if not os.path.exists(dir_name):
+                os.mkdir(dir_name)
+            if options['one_vs_all']:
+                #para_grid={'C':[0.1,0.5,1,5],'gamma':[10,5,1,0.1],'kernel':['linear','poly','rbf']}
+                para_grid={'C':[0.1,0.5],'gamma':[10,5],'kernel':['poly']}
+                grid = GridSearchCV(SVC(),para_grid,refit=True,verbose=2)
+                grid.fit(train_x,train_y)
+                print(grid.best_estimator_)
+                grid_predictions=grid.predict(test_x)
+                #print(confusion_matrix(test_y,grid_predictions))
+                print(classification_report(test_y,grid_predictions))
+                file_path=dir_name+str(options['num'])+'model.pickle'
+                with open(file_path,'wb') as fp:
+                    pickle.dump(grid,fp)
+                np.save(dir_name+str(options['num'])+'classification_report.npy',classification_report(test_y,grid_predictions))
+                
+                return accuracy_score(test_y,grid_predictions)
+            else:
+                #Since ovo will cause 10*9/2=45 classifers, if we use cross-validation, it will cause a lot. 
+                clf = SVC(decision_function_shape='ovo',C=options['C'],gamma=options['gamma'],kernel=options['kernel'])
+                clf.fit(train_x,train_y)
+                ovo_prediction=clf.predict(test_x)
+                
+                return accuracy_score(test_y,ovo_prediction)
 
-        pass
+                
+        return
 
     def predict(self, x: np.ndarray, alg: str = None, options: dict = {}) -> int:
         """
@@ -95,11 +134,38 @@ class ClassificationModel:
 
         pass
 
-
+def experiment(options):
+    if options['one_vs_all']:
+        acc_all=[]
+        for i in range(0,options['class_num']):
+            options['num']=i
+            dataset_for_digit = dataset.sub_dataset(i)
+            classifier = ClassificationModel(dataset_for_digit)
+            classifier.save('digit-'+str(i))
+            acc=classifier.learn(alg='SVM',options=options)
+            acc_all.append(acc)
+        plt.plot(range(0,options['class_num']),acc_all,label='SVM accuracy')
+        dir_name = f'../saved_model/svm_model/'
+        plt.savefig(dir_name+'accuracy_svm.jpg')
+        plt.show()
+        plt.close()
+    else:
+        classifier=ClassificationModel(dataset)
+        acc=classifier.learn(alg='SVM',options=options)
+        print("One vs One SVM accuracy is:",acc)
+       
 if __name__ == '__main__':
     dataset = Dataset(Dataset.load_matrix('../data/digits4000_digits_vec.txt'), Dataset.load_matrix('../data/digits4000_digits_labels.txt'))
-    dataset_for_digit_3 = dataset.sub_dataset(3)
-    classifier = ClassificationModel(dataset_for_digit_3)
-    classifier.save('digit-3')
-    classifier = ClassificationModel(saved_name='digit-3')
-    print(classifier.extract_feature(method='PCA', options={'dim_output': 15}))
+    options={'one_vs_all':False,
+        'test_ratio':0.3,
+        'class_num':10,
+        'C':0.1,
+        'gamma':1,
+        'kernel':'poly',
+        'dim_reduction':False,
+        'save_model':True
+        }
+    experiment(options)
+    # print(classifier.extract_feature(method='PCA', options={'dim_output': 15}))
+    
+

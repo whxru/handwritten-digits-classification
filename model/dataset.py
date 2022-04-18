@@ -1,6 +1,7 @@
 import numpy as np
 
 
+
 class Dataset:
     """
     Class for dealing with the structure of given data file
@@ -52,8 +53,8 @@ class Dataset:
                 for val_str in s.split():
                     row.append(float(val_str))
                 res.append(row)
+            print(np.array(res).shape)
             return np.array(res)
-
 
 if __name__ == '__main__':
     dataset = Dataset(Dataset.load_matrix('../data/digits4000_digits_vec.txt'), Dataset.load_matrix('../data/digits4000_digits_labels.txt'))
