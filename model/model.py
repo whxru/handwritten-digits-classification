@@ -2,6 +2,7 @@ from compileall import compile_file
 import os
 import numpy as np
 from dataset import Dataset
+from PIL import Image
 import matplotlib.pyplot as plt
 from sklearn.svm import SVC,LinearSVC
 from sklearn.model_selection import GridSearchCV
@@ -77,6 +78,26 @@ class ClassificationModel:
                 feature_mat.append(x_converted)
             feature_mat = np.array(feature_mat).reshape(output_shape)
 
+        if method.lower() == 'scale':
+            scale_ratio = 0.5 if 'scale_ratio' not in options else options['scale_ratio']
+            resampling_alg = Image.NEAREST if 'resampling_alg' not in options else {
+                'nearest': Image.NEAREST,
+                'box': Image.BOX,
+                'bilinear': Image.BILINEAR,
+                'hamming': Image.HAMMING,
+                'bicubic': Image.BICUBIC,
+                'lanczos': Image.LANCZOS
+            }[options['resampling_alg'].lower()]
+            for i, x in enumerate(x_mat):
+                original_img_size = int(np.sqrt(x_dim))
+                new_img_size = int(original_img_size * scale_ratio)
+                original_img_mat = x.reshape((original_img_size, original_img_size))
+                im = Image.fromarray(np.uint8(original_img_mat))
+                new_im = im.resize((new_img_size, new_img_size), resample=resampling_alg)
+                new_img_array = np.asarray(new_im).reshape(new_img_size * new_img_size)
+                feature_mat.append(new_img_array)
+
+        feature_mat = np.array(feature_mat)
         if save_to_feature:
             self._features = feature_mat
         if save_to_dataset:
@@ -151,7 +172,8 @@ def experiment(options):
         plt.close()
     else:
         classifier=ClassificationModel(dataset)
-        acc=classifier.learn(alg='SVM',options=options)
+        classifier.extract_feature(method='scale', save_to_dataset=True, options={'scale_ratio': .2})
+        acc=classifier.learn(alg='SVM', options=options)
         print("One vs One SVM accuracy is:",acc)
        
 if __name__ == '__main__':
