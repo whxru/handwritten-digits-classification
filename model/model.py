@@ -7,9 +7,27 @@ import matplotlib.pyplot as plt
 from sklearn.svm import SVC,LinearSVC
 from sklearn.model_selection import GridSearchCV
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import accuracy_score, classification_report
+from sklearn.metrics import ConfusionMatrixDisplay, accuracy_score, classification_report,confusion_matrix, plot_confusion_matrix
 from sklearn.decomposition import PCA
 import pickle
+
+
+options={'manually_one_vs_all':True,
+    'official_svm':True,
+    'OVO': True,
+    'OVR': True,
+    'test_ratio':0.3,
+    'class_num':10,
+    'C':0.1,
+    'gamma':1,
+    'kernel':'poly',
+    'dim_reduction':True,
+    'save_model':True,
+    'extract_feature':True,
+    'pca':True,
+    'scale':True,
+    'mixed':True
+    }
 
 
 class ClassificationModel:
@@ -107,7 +125,10 @@ class ClassificationModel:
             self._training_dataset = Dataset(feature_mat, self._training_dataset.labels)
         return feature_mat
 
-    def learn(self, alg: str = None, options: dict = {}):
+
+
+
+    def learn(self, data_type: str, official_svm, alg: str = None, options: dict = {}):
         """
         Learn from the extracted features and do training
         :param alg: optional, name for the used classification algorithm
@@ -117,38 +138,65 @@ class ClassificationModel:
         if alg == 'SVM':
             #use corss_validation to select the best parameter
             train_x, test_x, train_y, test_y = train_test_split(self._training_dataset.data, self._training_dataset.labels.ravel(), test_size=(1-options['test_ratio']))
-            dir_name = f'../saved_model/svm_model' 
+            
+            dir_name = f'../result/'+ data_type +'/'
             if not os.path.exists(dir_name):
                 os.makedirs(dir_name)
-            if options['manually_one_vs_all']:
+            
+            if options['manually_one_vs_all'] and official_svm == False:
                 #para_grid={'C':[0.1,0.5,1,5],'gamma':[10,5,1,0.1],'kernel':['linear','poly','rbf']}
-                para_grid={'C':[0.1,0.5],'gamma':[10,5],'kernel':['poly']}
+                para_grid={'C':[0.1,5],'gamma':[10],'kernel':['poly','linear']}
                 grid = GridSearchCV(SVC(),para_grid,refit=True,verbose=2)
                 grid.fit(train_x,train_y)
                 print(grid.best_estimator_)
                 grid_predictions=grid.predict(test_x)
-                print(classification_report(test_y,grid_predictions))
+                metrics=classification_report(test_y,grid_predictions,output_dict=True)
+                print(metrics)
+                #save the confusion matrix 
+                disp=ConfusionMatrixDisplay.from_estimator(
+                    grid,test_x,test_y,display_labels=[-1,1],cmap=plt.cm.Blues)
+                disp.ax_.set_title("Confusion Matrix for" + " Class "+str(options['num']))
+                plt.savefig(dir_name+str(options['num'])+"_cfm.jpg")
+                plt.close()
+                
+                """
                 file_path=dir_name+str(options['num'])+'model.pickle'
                 with open(file_path,'wb') as fp:
                     pickle.dump(grid,fp)
                 np.save(dir_name+str(options['num'])+'classification_report.npy',classification_report(test_y,grid_predictions))
+                """
+
+                acc_score=accuracy_score(test_y,grid_predictions)
+
+                #plot the FP and FN 
+                FP=np.where((test_y==-1)&(grid_predictions==1))[0]
+                FN=np.where((test_y==1)&(grid_predictions==-1))[0]
+                fig= plt.figure(figsize=(8,8))
+                for i in range(0,4):
+                    if i < 2:
+                        idx=FP[i]
+                        title="False Positive"
+                    else:
+                        idx=FN[i-2]
+                        title="False Negative"
+                    fig.add_subplot(2,2,i+1)
+                    img_mat = test_x[idx]
+                    img_length = int(np.sqrt(self._training_dataset.data_dim))
+                    img=img_mat.reshape((img_length, img_length))
+                    plt.imshow(img)
+                    plt.title(title)
+                plt.savefig(dir_name+str(options['num'])+"_misclassified.jpg")
+                plt.close()
                 
-                return accuracy_score(test_y,grid_predictions)
-            else:
+                
+                return acc_score,metrics
+               
+            elif options['official_svm'] and official_svm ==True:
                 if options['OVO']:
                     #Since ovo will cause 10*9/2=45 classifers, if we use cross-validation, it will cause a lot. 
-                    clf = SVC(decision_function_shape='ovo',C=options['C'],gamma=options['gamma'],kernel=options['kernel'])
-                    clf.fit(train_x,train_y)
-                    ovo_prediction=clf.predict(test_x)
-                    print("Non-manual One vs One SVM accuracy is:",accuracy_score(test_y,ovo_prediction))
-
+                    auto_svm(train_x,train_y,test_x,test_y,dir_name,svm_type='ovo',options=options)
                 if options['OVR']:
-                    clf = SVC(decision_function_shape='ovr',C=options['C'],gamma=options['gamma'],kernel=options['kernel'])
-                    clf.fit(train_x,train_y)
-                    ovo_prediction=clf.predict(test_x)
-                    print("Non-manual One vs rest SVM accuracy is:",accuracy_score(test_y,ovo_prediction))
-                #TODO 将这里修整一下
-
+                    auto_svm(train_x,train_y,test_x,test_y,dir_name,svm_type='ovr',options=options)
                 return 
 
                 
@@ -165,53 +213,162 @@ class ClassificationModel:
 
         pass
 
-def experiment(options):
-    if options['one_vs_all']:
+
+        
+
+
+def auto_svm(train_x,train_y,test_x,test_y,dir_name,svm_type,options=options):
+    """
+    Call sklearn SVM api.
+
+    param svm_type: indicate one-vs-one(ovo) or one-vs-rest(ovr)    
+    """
+
+    #Since ovo will cause 10*9/2=45 classifers, if we use cross-validation, it will cause a lot. 
+    clf = SVC(decision_function_shape=svm_type,C=options['C'],gamma=options['gamma'],kernel=options['kernel'])
+    clf.fit(train_x,train_y)
+    ovo_prediction=clf.predict(test_x)
+    acc=accuracy_score(test_y,ovo_prediction)
+    print("Non-manual "+svm_type+" SVM accuracy is:",acc)
+    disp=ConfusionMatrixDisplay.from_estimator(
+    clf,test_x,test_y,display_labels=range(0,10),cmap=plt.cm.Blues)
+    disp.ax_.set_title("Confusion Matrix for " +svm_type+", and accuracy is: "+ str(acc))
+    plt.savefig(dir_name+svm_type+"_cfm.jpg")
+    plt.close()
+
+
+
+def experiment(data_type,feature_extraction,method=None,official_svm=False,options=options):
+
+    """
+    The experiment function is divided into two parts.
+
+    The first part is our hand-written one-to-rest classifier. 
+
+    In the second part, we call the sklearn svm api to do the multi-class classification.
+    (ps: the underlying logic of it is also one-vs-one or one-vs-rest classifier.)
+
+    :param data_type: str, describe the data type(image or feature) and the SVM type we are running.
+    :param feature_extraction: bool, indicate whether use feature extraction method or not.
+    :param method:str, feature extraction method. 'pca','scale','mixed'
+    :param official svm:bool, indicate use manually one-vs-rest svm or the multi-class svm api.
+
+    """
+    dir_name = f'../result/'+ data_type+'/'
+    if official_svm==False:
         acc_all=[]
+        precision_all=[]
+        recall_all=[]
+
         for i in range(0,options['class_num']):
             options['num']=i
             dataset_for_digit = dataset.sub_dataset(i)
             classifier = ClassificationModel(dataset_for_digit)
-            classifier.save('digit-'+str(i))
-            acc=classifier.learn(alg='SVM',options=options)
+            #classifier.save('digit-'+str(i))
+            if feature_extraction == True:
+                classifier.extract_feature(method=method, save_to_dataset=True, options={
+                        'scale_ratio': .9,
+                        'resampling_alg': 'bilinear',
+                        'dim_output': 3 * 3
+                        })
+                       
+                
+            acc,metrics=classifier.learn(data_type,official_svm=official_svm,alg='SVM',options=options)
             acc_all.append(acc)
-        plt.plot(range(0,options['class_num']),acc_all,label='SVM accuracy')
-        dir_name = f'../saved_model/svm_model/'
-        plt.savefig(dir_name+'accuracy_svm.jpg')
-        plt.show()
+            precision_all.append(metrics['1.0']['precision'])
+            recall_all.append(metrics['1.0']['recall'])
+    
+        x_axis=range(0,options['class_num'])
+        plt.plot(x_axis,acc_all,label='SVM accuracy')
+        plt.xlabel('class')
+        plt.ylabel('accuracy')
+        for a, b in zip(x_axis,acc_all):
+            plt.text(a,b,b,ha='center',va='bottom',fontsize=5)
+        plt.legend()
+        
+        plt.savefig(dir_name+'accuracy_svm.jpg',dpi=300)
+        #plt.show()
         plt.close()
-    else:
+
+        plt.plot(x_axis,precision_all,label='SVM precision')
+        plt.legend()
+        plt.plot(x_axis,recall_all,label='SVM recall')
+        plt.legend()
+        plt.savefig(dir_name+'precision_recall.jpg',dpi=300)
+        plt.close()
+    elif official_svm:
         classifier=ClassificationModel(dataset)
-        classifier.extract_feature(method='scale', save_to_dataset=True, options={'scale_ratio': .2})
-        acc=classifier.learn(alg='SVM', options=options)
-        print("One vs One SVM accuracy is:",acc)
+        if feature_extraction == True:
+            classifier.extract_feature(method=method, save_to_dataset=True, options={
+                    'scale_ratio': .9,
+                    'resampling_alg': 'bilinear',
+                    'dim_output': 3 * 3
+                    })
+        #classifier.extract_feature(method='scale', save_to_dataset=True, options={'scale_ratio': .2})
+        acc=classifier.learn(data_type,official_svm=True,alg='SVM', options=options)
+
 
 
 if __name__ == '__main__':
     dataset = Dataset(Dataset.load_matrix('../data/digits4000_digits_vec.txt'), Dataset.load_matrix('../data/digits4000_digits_labels.txt'))
+    
+    """
     fig, axes = plt.subplots(nrows=2)
     classifier = ClassificationModel(dataset)
     idx = classifier.show_im(ax=axes[0])
-    classifier.extract_feature(method='mixed', save_to_dataset=True, options={
-        'scale_ratio': .9,
-        'resampling_alg': 'bilinear',
-        'dim_output': 3 * 3
-    })
+    
+    classifier.extract_feature(method='pca', save_to_dataset=True, options={
+    'scale_ratio': .9,
+    'resampling_alg': 'bilinear',
+    'dim_output': 3 * 3
+        })
+    
+    
+    classifier = ClassificationModel(dataset)
+    """
+
+
+
+    #comment the part you donnot need. Otherwise it is time consuming.
+
+    #use image 
+    if options['manually_one_vs_all']:
+        experiment("manually_ovr_img",feature_extraction=False) #our one to rest classifier
+    if options['official_svm']:
+        experiment("official_svm_img",feature_extraction=False,official_svm=True) #sklearn multiclass api
+
+    #use pca 
+    if options['extract_feature'] and options['pca']:
+        if options['manually_one_vs_all']:      
+            experiment("manually_ovr_pca",feature_extraction=True,method='pca')
+        if options['official_svm']:
+            experiment("official_svm_pca",feature_extraction=True,method='pca',official_svm=True) 
+    #use scale
+    if options['extract_feature'] and options['scale']:
+        if options['manually_one_vs_all']:        
+            experiment("manually_ovr_scale",feature_extraction=True,method='scale')
+        if options['official_svm']:
+            experiment("official_svm_scale",feature_extraction=True,method='scale',official_svm=True) 
+
+    #use mixed
+    if options['extract_feature'] and options['mixed']:
+        if options['manually_one_vs_all']:       
+            experiment("manually_ovr_mixed",feature_extraction=True,method='mixed')
+        if options['official_svm']:
+            experiment("official_svm_mixed",feature_extraction=True,method='mixed',official_svm=True) 
+           
+
+    """
     classifier.show_im(idx, ax=axes[1])
+    dir_name = f'../saved_model/'
+    plt.savefig(dir_name+"feature_img"+str(idx)+"_.jpg")
     plt.show()
 
-    options={'manually_one_vs_all':False,
-        'OVO': True,
-        'OVR': True,
-        'test_ratio':0.3,
-        'class_num':10,
-        'C':0.1,
-        'gamma':1,
-        'kernel':'poly',
-        'dim_reduction':False,
-        'save_model':True
-        }
-    experiment(options)
+
+
+    experiment("manually_svm_image",official_svm=False)
+
+    """
+
     # print(classifier.extract_feature(method='PCA', options={'dim_output': 15}))
-    
 
