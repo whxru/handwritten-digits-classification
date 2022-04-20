@@ -94,17 +94,16 @@ class ClassificationModel:
         if alg == 'SVM':
             #use corss_validation to select the best parameter
             train_x, test_x, train_y, test_y = train_test_split(self._training_dataset.data, self._training_dataset.labels.ravel(), test_size=(1-options['test_ratio']))
-            dir_name = f'../saved_model/svm_model/'
+            dir_name = f'../saved_model/svm_model' 
             if not os.path.exists(dir_name):
-                os.mkdir(dir_name)
-            if options['one_vs_all']:
+                os.makedirs(dir_name)
+            if options['manually_one_vs_all']:
                 #para_grid={'C':[0.1,0.5,1,5],'gamma':[10,5,1,0.1],'kernel':['linear','poly','rbf']}
                 para_grid={'C':[0.1,0.5],'gamma':[10,5],'kernel':['poly']}
                 grid = GridSearchCV(SVC(),para_grid,refit=True,verbose=2)
                 grid.fit(train_x,train_y)
                 print(grid.best_estimator_)
                 grid_predictions=grid.predict(test_x)
-                #print(confusion_matrix(test_y,grid_predictions))
                 print(classification_report(test_y,grid_predictions))
                 file_path=dir_name+str(options['num'])+'model.pickle'
                 with open(file_path,'wb') as fp:
@@ -113,12 +112,21 @@ class ClassificationModel:
                 
                 return accuracy_score(test_y,grid_predictions)
             else:
-                #Since ovo will cause 10*9/2=45 classifers, if we use cross-validation, it will cause a lot. 
-                clf = SVC(decision_function_shape='ovo',C=options['C'],gamma=options['gamma'],kernel=options['kernel'])
-                clf.fit(train_x,train_y)
-                ovo_prediction=clf.predict(test_x)
-                
-                return accuracy_score(test_y,ovo_prediction)
+                if options['OVO']:
+                    #Since ovo will cause 10*9/2=45 classifers, if we use cross-validation, it will cause a lot. 
+                    clf = SVC(decision_function_shape='ovo',C=options['C'],gamma=options['gamma'],kernel=options['kernel'])
+                    clf.fit(train_x,train_y)
+                    ovo_prediction=clf.predict(test_x)
+                    print("Non-manual One vs One SVM accuracy is:",accuracy_score(test_y,ovo_prediction))
+
+                if options['OVR']:
+                    clf = SVC(decision_function_shape='ovr',C=options['C'],gamma=options['gamma'],kernel=options['kernel'])
+                    clf.fit(train_x,train_y)
+                    ovo_prediction=clf.predict(test_x)
+                    print("Non-manual One vs rest SVM accuracy is:",accuracy_score(test_y,ovo_prediction))
+                #TODO 将这里修整一下
+
+                return 
 
                 
         return
@@ -151,12 +159,14 @@ def experiment(options):
         plt.close()
     else:
         classifier=ClassificationModel(dataset)
-        acc=classifier.learn(alg='SVM',options=options)
-        print("One vs One SVM accuracy is:",acc)
+        classifier.learn(alg='SVM',options=options)
+        
        
 if __name__ == '__main__':
     dataset = Dataset(Dataset.load_matrix('../data/digits4000_digits_vec.txt'), Dataset.load_matrix('../data/digits4000_digits_labels.txt'))
-    options={'one_vs_all':False,
+    options={'manually_one_vs_all':False,
+        'OVO': True,
+        'OVR': True,
         'test_ratio':0.3,
         'class_num':10,
         'C':0.1,
