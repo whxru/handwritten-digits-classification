@@ -2,11 +2,13 @@ from compileall import compile_file
 import os
 import numpy as np
 from dataset import Dataset
+from PIL import Image
 import matplotlib.pyplot as plt
 from sklearn.svm import SVC,LinearSVC
 from sklearn.model_selection import GridSearchCV
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score, classification_report
+from sklearn.decomposition import PCA
 import pickle
 
 
@@ -20,7 +22,6 @@ class ClassificationModel:
         self._param = np.array([])
         self._acc=[]
 
-
         if saved_name != '':
             self.restore(saved_name)
 
@@ -32,6 +33,16 @@ class ClassificationModel:
         np.save(f'{dir_name}/{name}#labels.npy', self._training_dataset.labels)
         np.save(f'{dir_name}/{name}#features.npy', self._features)
         np.save(f'{dir_name}/{name}#param.npy', self._param)
+
+    def show_im(self, img_idx=None, ax=None):
+        if img_idx is None:
+            img_idx = np.random.randint(low=0, high=self._training_dataset.label_num - 1)
+        if ax is None:
+            fig, ax = plt.subplots()
+        img_mat = self._training_dataset.data[img_idx]
+        img_length = int(np.sqrt(self._training_dataset.data_dim))
+        ax.imshow(img_mat.reshape((img_length, img_length)))
+        return img_idx
 
     def restore(self, name):
         dir_name = f'../saved_model/{name}'
@@ -57,32 +68,44 @@ class ClassificationModel:
         x_num = self._training_dataset.label_num
         feature_mat = []
 
-        if method.lower() == 'pca':
+        if method.lower() in ['scale', 'mixed']:
+            scale_ratio = 0.5 if 'scale_ratio' not in options else options['scale_ratio']
+            resampling_alg = Image.NEAREST if 'resampling_alg' not in options else {
+                'nearest': Image.NEAREST,
+                'box': Image.BOX,
+                'bilinear': Image.BILINEAR,
+                'hamming': Image.HAMMING,
+                'bicubic': Image.BICUBIC,
+                'lanczos': Image.LANCZOS
+            }[options['resampling_alg'].lower()]
+            for i, x in enumerate(x_mat):
+                original_img_size = int(np.sqrt(x_dim))
+                new_img_size = int(original_img_size * scale_ratio)
+                original_img_mat = x.reshape((original_img_size, original_img_size))
+                im = Image.fromarray(np.uint8(original_img_mat))
+                new_im = im.resize((new_img_size, new_img_size), resample=resampling_alg)
+                new_img_array = np.asarray(new_im).reshape(new_img_size * new_img_size)
+                feature_mat.append(new_img_array)
+
+        if method.lower() in ['pca', 'mixed']:
             # Parse algorithm parameter
             dim_output = 10 if 'dim_output' not in options else options['dim_output']
-            output_shape = (x_num, dim_output)
-            # Convert each row vec in data to a feature vec
-            for i, x in enumerate(x_mat):
-                print(i)
-                mu = np.sum(x) / x_dim
-                x = x.reshape((x.shape[0], 1))
-                cov = np.dot(x - mu, (x - mu).T)
-                eig_val, eig_vec = np.linalg.eig(cov)
-                eig_items = [{
-                    'val': eig_val[idx], 'vec': eig_vec[idx]
-                } for idx in range(len(eig_val))]
-                eig_items.sort(key=lambda item: item['val'], reverse=True)
-                phi = np.array([eig_items[idx]['vec'] for idx in range(dim_output)]).T
-                x_converted = np.dot(phi.T, x - mu).reshape(dim_output)
-                feature_mat.append(x_converted)
-            feature_mat = np.array(feature_mat).reshape(output_shape)
+            if method.lower() == 'mixed':
+                feature_mat = np.array(feature_mat)
+                x_mat = feature_mat.copy()
+                x_dim = x_mat.shape[1]
+
+            dim_output = min(dim_output, x_dim)
+            pca = PCA(n_components=dim_output)
+            feature_mat = pca.fit_transform(x_mat)
+
+        feature_mat = np.array(feature_mat)
 
         if save_to_feature:
             self._features = feature_mat
         if save_to_dataset:
             self._training_dataset = Dataset(feature_mat, self._training_dataset.labels)
         return feature_mat
-
 
     def learn(self, alg: str = None, options: dict = {}):
         """
@@ -159,11 +182,24 @@ def experiment(options):
         plt.close()
     else:
         classifier=ClassificationModel(dataset)
-        classifier.learn(alg='SVM',options=options)
-        
-       
+        classifier.extract_feature(method='scale', save_to_dataset=True, options={'scale_ratio': .2})
+        acc=classifier.learn(alg='SVM', options=options)
+        print("One vs One SVM accuracy is:",acc)
+
+
 if __name__ == '__main__':
     dataset = Dataset(Dataset.load_matrix('../data/digits4000_digits_vec.txt'), Dataset.load_matrix('../data/digits4000_digits_labels.txt'))
+    fig, axes = plt.subplots(nrows=2)
+    classifier = ClassificationModel(dataset)
+    idx = classifier.show_im(ax=axes[0])
+    classifier.extract_feature(method='mixed', save_to_dataset=True, options={
+        'scale_ratio': .9,
+        'resampling_alg': 'bilinear',
+        'dim_output': 3 * 3
+    })
+    classifier.show_im(idx, ax=axes[1])
+    plt.show()
+
     options={'manually_one_vs_all':False,
         'OVO': True,
         'OVR': True,
