@@ -75,10 +75,9 @@ class ClassificationModel:
         self._param = np.load(f'{dir_name}/{name}#param.npy')
 
     @staticmethod
-    def stat_extract_feature(x_mat, method='pca', options={}):
+    def stat_extract_feature(x_mat, method='pca', options={}, transformer=None):
         x_dim = x_mat.shape[1]
         feature_mat = []
-        transformer = None
 
         if method.lower() in ['scale', 'mixed']:
             scale_ratio = 0.5 if 'scale_ratio' not in options else options['scale_ratio']
@@ -109,9 +108,12 @@ class ClassificationModel:
                 x_dim = x_mat.shape[1]
 
             dim_output = min(dim_output, x_dim)
-            pca = PCA(n_components=dim_output)
-            transformer = pca
-            feature_mat = pca.fit_transform(x_mat)
+            if transformer is not None:
+                feature_mat = transformer.transform(x_mat)
+            else:
+                pca = PCA(n_components=dim_output)
+                transformer = pca
+                feature_mat = pca.fit_transform(x_mat)
 
         return feature_mat, transformer
 
@@ -128,10 +130,7 @@ class ClassificationModel:
         t0 = time.time()
         transformer = None
         for data_type, x_mat in enumerate([self._training_dataset.data, self._test_dataset.data]):
-            if transformer is not None:
-                feature_mat = transformer.transform(x_mat)
-            else:
-                feature_mat, transformer = ClassificationModel.stat_extract_feature(x_mat, method=method, options=options)
+            feature_mat, transformer = ClassificationModel.stat_extract_feature(x_mat, method=method, options=options, transformer=transformer)
             if save_to_feature:
                 if data_type == 0:
                     self._features = feature_mat.copy()
@@ -166,12 +165,12 @@ class ClassificationModel:
                 # para_grid={'C':[1e-3, 1e-2, 5e-2],'gamma':[10, 15],'kernel':['poly']}
                 # para_grid={'C':[0.1,5],'gamma':[10],'kernel':['poly','linear']}
                 para_grid={'C':[0.1],'gamma':[10],'kernel':['poly']}
-                grid = GridSearchCV(SVC(probability=True),para_grid,refit=True,verbose=2)
+                grid = GridSearchCV(SVC(probability=True),para_grid,refit=True,verbose=0)
                 grid.fit(train_x,train_y)
-                print(grid.best_estimator_)
+                # print(grid.best_estimator_)
                 grid_predictions=grid.predict(test_x)
                 metrics=classification_report(test_y,grid_predictions,output_dict=True)
-                print(metrics)
+                # print(metrics)
                 #save the confusion matrix 
                 disp=ConfusionMatrixDisplay.from_estimator(
                     grid,test_x,test_y,display_labels=[-1,1],cmap=plt.cm.Blues)
@@ -193,7 +192,7 @@ class ClassificationModel:
                 FN=np.where((test_y==1)&(grid_predictions==-1))[0]
                 fig= plt.figure(figsize=(8,8))
                 plt.title(data_type+" class "+str(class_num)+" false result ",pad=30,fontsize=15)
-                
+
                 for i in range(0,4):
                     if i < 2:
                         if i >= len(FP):
@@ -282,6 +281,7 @@ def experiment(data_type,feature_extraction,method=None,official_svm=False,optio
     :param official svm:bool, indicate use manually one-vs-rest svm or the multi-class svm api.
 
     """
+    t0 = time.time()
     dir_name = f'../result/'+ data_type+'/'
     if official_svm==False:
         acc_all=[]
@@ -348,6 +348,7 @@ def experiment(data_type,feature_extraction,method=None,official_svm=False,optio
                     })
         #classifier.extract_feature(method='scale', save_to_dataset=True, options={'scale_ratio': .2})
         acc=classifier.learn(data_type,official_svm=True,alg='SVM', options=options)
+    print(f'''{data_type}: overall time is {time.time() - t0} seconds''')
 
 dataset, test_dataset = None, None
 first_half_as_training = True
@@ -374,19 +375,21 @@ if __name__ == '__main__':
     """
 
     for pca_output_dim in [20, 14, 8]:
-        scale_ratio = (28 + pca_output_dim) / 2 / 28
-        t0 = time.time()
-        experiment(f'''PCA-to-{pca_output_dim}''', feature_extraction=True, method='pca', feature_alg_opt={
-            'dim_output': pca_output_dim * pca_output_dim
-        })
-        print(f'''PCA-to-{pca_output_dim}: overall {(time.time() - t0) / 60} seconds\n\n''')
-        t0 = time.time()
+        prescale_ratio = (28 + pca_output_dim) / 2 / 28
+
         experiment(f'''PCA-to-{pca_output_dim}-with-Prescaling''', feature_extraction=True, method='mixed', feature_alg_opt={
-            'scale_ratio': scale_ratio,
+            'scale_ratio': prescale_ratio,
             'resampling_alg': 'bilinear',
             'dim_output': pca_output_dim * pca_output_dim
         })
-        print(f'''PCA-to-{pca_output_dim}-with-Prescaling: overall {(time.time() - t0) / 60} seconds\n\n''')
+
+        experiment(f'''PCA-to-{pca_output_dim}''', feature_extraction=True, method='pca', feature_alg_opt={
+            'dim_output': pca_output_dim * pca_output_dim
+        })
+
+        experiment(f'''Pure-Scale-to-{pca_output_dim}''', feature_extraction=True, method='scale', feature_alg_opt={
+            'scale_ratio': pca_output_dim / 28
+        })
 
 
 
@@ -430,7 +433,7 @@ if __name__ == '__main__':
 
     experiment("test",feature_extraction=False,official_svm=False)
     """
-    
+
 
     # print(classifier.extract_feature(method='PCA', options={'dim_output': 15}))
 
