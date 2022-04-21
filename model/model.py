@@ -2,6 +2,7 @@ from compileall import compile_file
 import os
 import numpy as np
 import time
+from pkg_resources import cleanup_resources
 from dataset import Dataset
 from PIL import Image
 import matplotlib.pyplot as plt
@@ -143,7 +144,7 @@ class ClassificationModel:
                     self._test_dataset = Dataset(feature_mat, self._test_dataset.labels)
         print(f'Feature extraction time: {time.time() - t0} seconds')
 
-    def learn(self, data_type: str, official_svm, alg: str = None, options: dict = {}):
+    def learn(self, data_type: str, official_svm, class_num: int = 0, alg: str = None, options: dict = {}):
         """
         Learn from the extracted features and do training
         :param alg: optional, name for the used classification algorithm
@@ -191,6 +192,8 @@ class ClassificationModel:
                 FP=np.where((test_y==-1)&(grid_predictions==1))[0]
                 FN=np.where((test_y==1)&(grid_predictions==-1))[0]
                 fig= plt.figure(figsize=(8,8))
+                plt.title(data_type+" class "+str(class_num)+" false result ",pad=30,fontsize=15)
+                
                 for i in range(0,4):
                     if i < 2:
                         if i >= len(FP):
@@ -203,11 +206,13 @@ class ClassificationModel:
                         idx=FN[i-2]
                         title="False Negative"
                     fig.add_subplot(2,2,i+1)
+
                     img_mat = test_x[idx]
                     img_length = int(np.sqrt(self._training_dataset.data_dim))
                     img=img_mat.reshape((img_length, img_length))
                     plt.imshow(img)
                     plt.title(title)
+                #
                 plt.savefig(dir_name+str(options['num'])+"_misclassified.jpg")
                 plt.close()
                 
@@ -318,9 +323,10 @@ def experiment(data_type,feature_extraction,method=None,official_svm=False,optio
         plt.xlabel('class')
         plt.ylabel('accuracy')
         for a, b in zip(x_axis,acc_all):
-            plt.text(a,b,b,ha='center',va='bottom',fontsize=5)
+            b=round(b,3)
+            plt.text(a,b,b,ha='center',va='bottom',fontsize=10)
         plt.legend()
-        
+        plt.title(data_type+" Accuracy ")
         plt.savefig(dir_name+'accuracy_svm.jpg',dpi=300)
         #plt.show()
         plt.close()
@@ -329,6 +335,7 @@ def experiment(data_type,feature_extraction,method=None,official_svm=False,optio
         plt.legend()
         plt.plot(x_axis,recall_all,label='SVM recall')
         plt.legend()
+        plt.title(data_type+" Precision and Recall ")
         plt.savefig(dir_name+'precision_recall.jpg',dpi=300)
         plt.close()
     elif official_svm:
@@ -397,7 +404,7 @@ if __name__ == '__main__':
         if options['manually_one_vs_all']:      
             experiment("manually_ovr_pca",feature_extraction=True,method='pca')
         if options['official_svm']:
-            experiment("official_svm_pca",feature_extraction=True,method='pca',official_svm=True) 
+           experiment("official_svm_pca",feature_extraction=True,method='pca',official_svm=True) 
     #use scale
     if options['extract_feature'] and options['scale']:
         if options['manually_one_vs_all']:        
@@ -421,9 +428,9 @@ if __name__ == '__main__':
 
 
 
-    experiment("manually_svm_image",official_svm=False)
-
+    experiment("test",feature_extraction=False,official_svm=False)
     """
+    
 
     # print(classifier.extract_feature(method='PCA', options={'dim_output': 15}))
 
