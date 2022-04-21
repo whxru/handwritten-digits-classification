@@ -1,7 +1,6 @@
 import numpy as np
 
 
-
 class Dataset:
     """
     Class for dealing with the structure of given data file

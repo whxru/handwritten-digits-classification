@@ -1,6 +1,7 @@
 from compileall import compile_file
 import os
 import numpy as np
+import time
 from dataset import Dataset
 from PIL import Image
 import matplotlib.pyplot as plt
@@ -32,11 +33,13 @@ options={'manually_one_vs_all':True,
 
 class ClassificationModel:
 
-    def __init__(self, training_dataset: Dataset = None, saved_name=''):
+    def __init__(self, training_dataset: Dataset = None, test_dataset: Dataset = None, saved_name=''):
         assert saved_name is not None or training_dataset is not None
 
         self._training_dataset = training_dataset
+        self._test_dataset = test_dataset
         self._features = np.array([])
+        self._features_test = np.array([])
         self._param = np.array([])
         self._acc=[]
 
@@ -70,21 +73,11 @@ class ClassificationModel:
         self._features = np.load(f'{dir_name}/{name}#features.npy')
         self._param = np.load(f'{dir_name}/{name}#param.npy')
 
-    def extract_feature(self, save_to_feature: bool = False, save_to_dataset = False, method: str = None, output_shape: np.shape = None, options: dict = {}) -> np.ndarray:
-        """
-        Extract features from the raw data
-        :param save_to_feature: whether save the extracted features to self._features or not
-        :param save_to_dataset: whether save the extracted features to self._training_dataset or not
-        :param method: optional, name for the feature extraction method
-        :param output_shape: optional, shape for the expected feature
-        :param options: optional, key-value pairs for the algorithm setting
-        :return: extracted features
-        """
-
-        x_mat = self._training_dataset.data
-        x_dim = self._training_dataset.data_dim
-        x_num = self._training_dataset.label_num
+    @staticmethod
+    def stat_extract_feature(x_mat, method='pca', options={}):
+        x_dim = x_mat.shape[1]
         feature_mat = []
+        transformer = None
 
         if method.lower() in ['scale', 'mixed']:
             scale_ratio = 0.5 if 'scale_ratio' not in options else options['scale_ratio']
@@ -105,28 +98,50 @@ class ClassificationModel:
                 new_img_array = np.asarray(new_im).reshape(new_img_size * new_img_size)
                 feature_mat.append(new_img_array)
 
+        feature_mat = np.array(feature_mat)
+
         if method.lower() in ['pca', 'mixed']:
             # Parse algorithm parameter
             dim_output = 10 if 'dim_output' not in options else options['dim_output']
             if method.lower() == 'mixed':
-                feature_mat = np.array(feature_mat)
                 x_mat = feature_mat.copy()
                 x_dim = x_mat.shape[1]
 
             dim_output = min(dim_output, x_dim)
             pca = PCA(n_components=dim_output)
+            transformer = pca
             feature_mat = pca.fit_transform(x_mat)
 
-        feature_mat = np.array(feature_mat)
+        return feature_mat, transformer
 
-        if save_to_feature:
-            self._features = feature_mat
-        if save_to_dataset:
-            self._training_dataset = Dataset(feature_mat, self._training_dataset.labels)
-        return feature_mat
-
-
-
+    def extract_feature(self, save_to_feature: bool = False, save_to_dataset = False, method: str = None, output_shape: np.shape = None, options: dict = {}) -> np.ndarray:
+        """
+        Extract features from the raw data
+        :param save_to_feature: whether save the extracted features to self._features or not
+        :param save_to_dataset: whether save the extracted features to self._training_dataset or not
+        :param method: optional, name for the feature extraction method
+        :param output_shape: optional, shape for the expected feature
+        :param options: optional, key-value pairs for the algorithm setting
+        :return: extracted features
+        """
+        t0 = time.time()
+        transformer = None
+        for data_type, x_mat in enumerate([self._training_dataset.data, self._test_dataset.data]):
+            if transformer is not None:
+                feature_mat = transformer.transform(x_mat)
+            else:
+                feature_mat, transformer = ClassificationModel.stat_extract_feature(x_mat, method=method, options=options)
+            if save_to_feature:
+                if data_type == 0:
+                    self._features = feature_mat.copy()
+                else:
+                    self._features_test = feature_mat.copy()
+            if save_to_dataset:
+                if data_type == 0:
+                    self._training_dataset = Dataset(feature_mat, self._training_dataset.labels)
+                else:
+                    self._test_dataset = Dataset(feature_mat, self._test_dataset.labels)
+        print(f'Feature extraction time: {time.time() - t0} seconds')
 
     def learn(self, data_type: str, official_svm, alg: str = None, options: dict = {}):
         """
@@ -137,16 +152,20 @@ class ClassificationModel:
         """
         if alg == 'SVM':
             #use corss_validation to select the best parameter
-            train_x, test_x, train_y, test_y = train_test_split(self._training_dataset.data, self._training_dataset.labels.ravel(), test_size=(1-options['test_ratio']))
-            
+            # train_x, test_x, train_y, test_y = train_test_split(self._test_dataset.data, self._test_dataset.labels.ravel(), test_size=(1-options['test_ratio']))
+            train_x, train_y = self._training_dataset.data, self._training_dataset.labels
+            test_x, test_y = self._test_dataset.data, self._test_dataset.labels
+            train_y.resize(train_y.shape[0])
+            test_y.resize(test_y.shape[0])
             dir_name = f'../result/'+ data_type +'/'
             if not os.path.exists(dir_name):
                 os.makedirs(dir_name)
             
             if options['manually_one_vs_all'] and official_svm == False:
-                #para_grid={'C':[0.1,0.5,1,5],'gamma':[10,5,1,0.1],'kernel':['linear','poly','rbf']}
-                para_grid={'C':[0.1,5],'gamma':[10],'kernel':['poly','linear']}
-                grid = GridSearchCV(SVC(),para_grid,refit=True,verbose=2)
+                # para_grid={'C':[1e-3, 1e-2, 5e-2],'gamma':[10, 15],'kernel':['poly']}
+                # para_grid={'C':[0.1,5],'gamma':[10],'kernel':['poly','linear']}
+                para_grid={'C':[0.1],'gamma':[10],'kernel':['poly']}
+                grid = GridSearchCV(SVC(probability=True),para_grid,refit=True,verbose=2)
                 grid.fit(train_x,train_y)
                 print(grid.best_estimator_)
                 grid_predictions=grid.predict(test_x)
@@ -174,9 +193,13 @@ class ClassificationModel:
                 fig= plt.figure(figsize=(8,8))
                 for i in range(0,4):
                     if i < 2:
+                        if i >= len(FP):
+                            continue
                         idx=FP[i]
                         title="False Positive"
                     else:
+                        if i >= len(FN):
+                            continue
                         idx=FN[i-2]
                         title="False Negative"
                     fig.add_subplot(2,2,i+1)
@@ -188,8 +211,8 @@ class ClassificationModel:
                 plt.savefig(dir_name+str(options['num'])+"_misclassified.jpg")
                 plt.close()
                 
-                
-                return acc_score,metrics
+                grid_prob = grid.predict_proba(self._test_dataset.data).copy()
+                return acc_score, metrics, grid_prob
                
             elif options['official_svm'] and official_svm ==True:
                 if options['OVO']:
@@ -238,7 +261,7 @@ def auto_svm(train_x,train_y,test_x,test_y,dir_name,svm_type,options=options):
 
 
 
-def experiment(data_type,feature_extraction,method=None,official_svm=False,options=options):
+def experiment(data_type,feature_extraction,method=None,official_svm=False,options=options, feature_alg_opt=None):
 
     """
     The experiment function is divided into two parts.
@@ -259,25 +282,37 @@ def experiment(data_type,feature_extraction,method=None,official_svm=False,optio
         acc_all=[]
         precision_all=[]
         recall_all=[]
+        grid_probs = []
 
-        for i in range(0,options['class_num']):
+        for i in range(options['class_num']):
             options['num']=i
             dataset_for_digit = dataset.sub_dataset(i)
-            classifier = ClassificationModel(dataset_for_digit)
+            test_dataset_for_digit = test_dataset.sub_dataset(i)
+            classifier = ClassificationModel(dataset_for_digit, test_dataset_for_digit)
             #classifier.save('digit-'+str(i))
             if feature_extraction == True:
-                classifier.extract_feature(method=method, save_to_dataset=True, options={
-                        'scale_ratio': .9,
-                        'resampling_alg': 'bilinear',
-                        'dim_output': 3 * 3
-                        })
-                       
-                
-            acc,metrics=classifier.learn(data_type,official_svm=official_svm,alg='SVM',options=options)
+                feature_alg_opt = {
+                    'scale_ratio': .9,
+                    'resampling_alg': 'bilinear',
+                    'dim_output': 3 * 3
+                } if feature_alg_opt is None else feature_alg_opt
+                classifier.extract_feature(method=method, save_to_dataset=True, options=feature_alg_opt)
+
+            acc, metrics, grid_prob=classifier.learn(data_type,official_svm=official_svm,alg='SVM',options=options)
             acc_all.append(acc)
             precision_all.append(metrics['1.0']['precision'])
             recall_all.append(metrics['1.0']['recall'])
-    
+            grid_probs.append(grid_prob)
+
+        # Overall classification test
+        right_counter = 0
+        for i in range(len(test_dataset.data)):
+            predict_prob = [grid_prob[i][1] for grid_prob in grid_probs]
+            predicted_num = np.argmax(predict_prob)
+            if predicted_num == test_dataset.labels[i][0]:
+                right_counter += 1
+        print(f'Overall accuracy: {round(right_counter / len(test_dataset.data), 5)}')
+
         x_axis=range(0,options['class_num'])
         plt.plot(x_axis,acc_all,label='SVM accuracy')
         plt.xlabel('class')
@@ -297,7 +332,7 @@ def experiment(data_type,feature_extraction,method=None,official_svm=False,optio
         plt.savefig(dir_name+'precision_recall.jpg',dpi=300)
         plt.close()
     elif official_svm:
-        classifier=ClassificationModel(dataset)
+        classifier=ClassificationModel(dataset, test_dataset)
         if feature_extraction == True:
             classifier.extract_feature(method=method, save_to_dataset=True, options={
                     'scale_ratio': .9,
@@ -307,11 +342,15 @@ def experiment(data_type,feature_extraction,method=None,official_svm=False,optio
         #classifier.extract_feature(method='scale', save_to_dataset=True, options={'scale_ratio': .2})
         acc=classifier.learn(data_type,official_svm=True,alg='SVM', options=options)
 
-
+dataset, test_dataset = None, None
+first_half_as_training = True
 
 if __name__ == '__main__':
-    dataset = Dataset(Dataset.load_matrix('../data/digits4000_digits_vec.txt'), Dataset.load_matrix('../data/digits4000_digits_labels.txt'))
-    
+    data1, data2 = np.split(Dataset.load_matrix('../data/digits4000_digits_vec.txt'), 2, axis=0)
+    label1, label2 = np.split(Dataset.load_matrix('../data/digits4000_digits_labels.txt'), 2, axis=0)
+    dataset = Dataset(data1, label1) if first_half_as_training else Dataset(data2, label2)
+    test_dataset = Dataset(data2, label2) if first_half_as_training else Dataset(data1, label1)
+
     """
     fig, axes = plt.subplots(nrows=2)
     classifier = ClassificationModel(dataset)
@@ -327,8 +366,24 @@ if __name__ == '__main__':
     classifier = ClassificationModel(dataset)
     """
 
+    for pca_output_dim in [20, 14, 8]:
+        scale_ratio = (28 + pca_output_dim) / 2 / 28
+        t0 = time.time()
+        experiment(f'''PCA-to-{pca_output_dim}''', feature_extraction=True, method='pca', feature_alg_opt={
+            'dim_output': pca_output_dim * pca_output_dim
+        })
+        print(f'''PCA-to-{pca_output_dim}: overall {(time.time() - t0) / 60} seconds\n\n''')
+        t0 = time.time()
+        experiment(f'''PCA-to-{pca_output_dim}-with-Prescaling''', feature_extraction=True, method='mixed', feature_alg_opt={
+            'scale_ratio': scale_ratio,
+            'resampling_alg': 'bilinear',
+            'dim_output': pca_output_dim * pca_output_dim
+        })
+        print(f'''PCA-to-{pca_output_dim}-with-Prescaling: overall {(time.time() - t0) / 60} seconds\n\n''')
 
 
+
+    '''
     #comment the part you donnot need. Otherwise it is time consuming.
 
     #use image 
@@ -356,7 +411,7 @@ if __name__ == '__main__':
             experiment("manually_ovr_mixed",feature_extraction=True,method='mixed')
         if options['official_svm']:
             experiment("official_svm_mixed",feature_extraction=True,method='mixed',official_svm=True) 
-           
+    '''
 
     """
     classifier.show_im(idx, ax=axes[1])
